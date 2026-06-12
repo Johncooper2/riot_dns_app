@@ -9,23 +9,17 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  # VPN service برای DNS changer بدون root
+  
   flutter_vpn: ^0.13.0
-  # شبکه و HTTP
   http: ^1.2.0
-  # ذخیره تنظیمات
   shared_preferences: ^2.2.2
-  # آیکون‌ها
   flutter_svg: ^2.0.9
-  # انیمیشن
   flutter_animate: ^4.5.0
-  # چارت برای نمایش latency
   fl_chart: ^0.67.0
-  # کپی به clipboard
-  flutter_clipboard_manager: ^0.0.2
-  # permission handler
   permission_handler: ^11.3.0
-
+  
+  
+  clipboard: ^3.0.14     
 dev_dependencies:
   flutter_test:
     sdk: flutter
