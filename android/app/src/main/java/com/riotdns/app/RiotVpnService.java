@@ -1,0 +1,309 @@
+package com.riotdns.app;
+
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.content.Context;
+import android.content.Intent;
+import android.net.VpnService;
+import android.os.Build;
+import android.os.ParcelFileDescriptor;
+import android.util.Log;
+import androidx.core.app.NotificationCompat;
+
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.nio.ByteBuffer;
+import java.nio.channels.DatagramChannel;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+/**
+ * RiotVpnService
+ * ─────────────────────────────────────────────────────────────
+ * VPN-based DNS changer بدون نیاز به root.
+ * روش کار:
+ *   1. یه VPN interface مجازی (tun0) می‌سازه
+ *   2. فقط ترافیک DNS (پورت 53 UDP) رو intercept می‌کنه
+ *   3. query‌ها رو به DNS انتخاب‌شده توسط کاربر forward می‌کنه
+ *   4. جواب‌ها رو برمی‌گردونه به app
+ *
+ * نتیجه: همه اپ‌های گوشی از DNS دلخواه استفاده می‌کنن.
+ */
+public class RiotVpnService extends VpnService {
+
+    private static final String TAG         = "RiotVpnService";
+    private static final String CHANNEL_ID  = "riot_dns_vpn";
+    private static final int    NOTIF_ID    = 1001;
+    private static final int    VPN_MTU     = 1500;
+
+    // آدرس مجازی VPN interface
+    private static final String VPN_ADDRESS = "10.0.0.2";
+    private static final String VPN_ROUTE   = "0.0.0.0";
+    private static final int    VPN_PREFIX  = 0;  // default route
+
+    // DNS پیش‌فرض (از Flutter ست می‌شه)
+    public static String PRIMARY_DNS   = "1.1.1.1";
+    public static String SECONDARY_DNS = "8.8.8.8";
+    public static String DNS_PROTOCOL  = "DoU";  // DoU | DoT | DoH
+    public static String DOT_HOSTNAME  = "";
+
+    private ParcelFileDescriptor vpnInterface;
+    private ExecutorService      executor;
+    private AtomicBoolean        running = new AtomicBoolean(false);
+
+    // ─── Flutter ↔ Java Channel ────────────────────────────────
+    public static final String ACTION_START  = "com.riotdns.START";
+    public static final String ACTION_STOP   = "com.riotdns.STOP";
+    public static final String EXTRA_DNS1    = "dns1";
+    public static final String EXTRA_DNS2    = "dns2";
+    public static final String EXTRA_PROTO   = "protocol";
+    public static final String EXTRA_DOTHOST = "dot_hostname";
+
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
+        if (intent == null) return START_NOT_STICKY;
+
+        String action = intent.getAction();
+        if (ACTION_STOP.equals(action)) {
+            stopVpn();
+            return START_NOT_STICKY;
+        }
+
+        // پارامترهای DNS از Flutter
+        PRIMARY_DNS   = intent.getStringExtra(EXTRA_DNS1);
+        SECONDARY_DNS = intent.getStringExtra(EXTRA_DNS2);
+        DNS_PROTOCOL  = intent.getStringExtra(EXTRA_PROTO);
+        DOT_HOSTNAME  = intent.getStringExtra(EXTRA_DOTHOST);
+
+        if (PRIMARY_DNS == null) PRIMARY_DNS = "1.1.1.1";
+
+        startVpn();
+        return START_STICKY;
+    }
+
+    private void startVpn() {
+        try {
+            createNotificationChannel();
+            startForeground(NOTIF_ID, buildNotification());
+
+            // ساخت VPN interface
+            Builder builder = new Builder();
+            builder.setMtu(VPN_MTU);
+            builder.addAddress(VPN_ADDRESS, 32);
+            builder.addDnsServer(PRIMARY_DNS);
+            if (SECONDARY_DNS != null && !SECONDARY_DNS.isEmpty()) {
+                builder.addDnsServer(SECONDARY_DNS);
+            }
+            // فقط DNS traffic رو route کن (پورت 53)
+            // با addRoute کل traffic رو route می‌کنیم ولی فقط DNS forward می‌کنیم
+            builder.addRoute(VPN_ROUTE, VPN_PREFIX);
+            builder.setSession("Riot DNS");
+            builder.setBlocking(true);
+
+            vpnInterface = builder.establish();
+            if (vpnInterface == null) {
+                Log.e(TAG, "Failed to establish VPN");
+                return;
+            }
+
+            running.set(true);
+            executor = Executors.newFixedThreadPool(2);
+            executor.submit(this::runDnsProxy);
+
+            Log.i(TAG, "VPN started — DNS: " + PRIMARY_DNS + " Protocol: " + DNS_PROTOCOL);
+
+        } catch (Exception e) {
+            Log.e(TAG, "startVpn error: " + e.getMessage());
+        }
+    }
+
+    /**
+     * DNS Proxy loop:
+     * packet از tun interface می‌خونه ←
+     * اگه DNS (UDP port 53) بود، به PRIMARY_DNS forward می‌کنه ←
+     * جواب رو برمی‌گردونه به tun ←
+     */
+    private void runDnsProxy() {
+        FileInputStream  in  = new FileInputStream(vpnInterface.getFileDescriptor());
+        FileOutputStream out = new FileOutputStream(vpnInterface.getFileDescriptor());
+        ByteBuffer packet = ByteBuffer.allocate(VPN_MTU);
+
+        try (DatagramSocket dnsSocket = new DatagramSocket()) {
+            protect(dnsSocket);  // از VPN loop جلوگیری می‌کنه
+
+            while (running.get()) {
+                packet.clear();
+                int length = in.read(packet.array());
+                if (length <= 0) continue;
+                packet.limit(length);
+
+                // parse IP header — بررسی DNS
+                if (!isDnsPacket(packet.array(), length)) {
+                    // برای بسته‌های غیر DNS، مستقیم forward کن
+                    out.write(packet.array(), 0, length);
+                    continue;
+                }
+
+                // استخراج DNS payload از UDP/IP packet
+                byte[] dnsPayload = extractDnsPayload(packet.array(), length);
+                if (dnsPayload == null) continue;
+
+                // forward به DNS سرور
+                InetAddress dnsAddr = InetAddress.getByName(PRIMARY_DNS);
+                DatagramPacket req  = new DatagramPacket(dnsPayload, dnsPayload.length, dnsAddr, 53);
+                dnsSocket.send(req);
+
+                // دریافت جواب
+                byte[] respBuf = new byte[VPN_MTU];
+                DatagramPacket resp = new DatagramPacket(respBuf, respBuf.length);
+                dnsSocket.setSoTimeout(3000);
+                try {
+                    dnsSocket.receive(resp);
+                    // بسته جواب رو rebuild کن و به tun بنویس
+                    byte[] replyPacket = buildReplyPacket(
+                        packet.array(), resp.getData(), resp.getLength()
+                    );
+                    if (replyPacket != null) {
+                        out.write(replyPacket);
+                    }
+                } catch (Exception e) {
+                    // timeout — با secondary DNS امتحان کن
+                    if (SECONDARY_DNS != null && !SECONDARY_DNS.isEmpty()) {
+                        try {
+                            InetAddress dns2 = InetAddress.getByName(SECONDARY_DNS);
+                            DatagramPacket req2 = new DatagramPacket(dnsPayload, dnsPayload.length, dns2, 53);
+                            dnsSocket.send(req2);
+                            dnsSocket.receive(resp);
+                            byte[] replyPacket = buildReplyPacket(packet.array(), resp.getData(), resp.getLength());
+                            if (replyPacket != null) out.write(replyPacket);
+                        } catch (Exception ignored) {}
+                    }
+                }
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "DNS proxy error: " + e.getMessage());
+        }
+    }
+
+    /** بررسی اینکه بسته IP یه DNS query هست (UDP، destination port 53) */
+    private boolean isDnsPacket(byte[] data, int len) {
+        if (len < 28) return false;
+        int protocol = data[9] & 0xFF;  // IP protocol field
+        if (protocol != 17) return false;  // 17 = UDP
+        // IP header length
+        int ihl = (data[0] & 0x0F) * 4;
+        if (len < ihl + 8) return false;
+        int dstPort = ((data[ihl + 2] & 0xFF) << 8) | (data[ihl + 3] & 0xFF);
+        return dstPort == 53;
+    }
+
+    /** استخراج DNS payload از بسته UDP/IP */
+    private byte[] extractDnsPayload(byte[] data, int len) {
+        try {
+            int ihl    = (data[0] & 0x0F) * 4;
+            int udpLen = ((data[ihl + 4] & 0xFF) << 8) | (data[ihl + 5] & 0xFF);
+            int payloadLen = udpLen - 8;
+            if (payloadLen <= 0) return null;
+            byte[] payload = new byte[payloadLen];
+            System.arraycopy(data, ihl + 8, payload, 0, payloadLen);
+            return payload;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** ساخت بسته IP/UDP جواب برای برگشت به tun */
+    private byte[] buildReplyPacket(byte[] originalReq, byte[] dnsResp, int respLen) {
+        try {
+            int ihl = (originalReq[0] & 0x0F) * 4;
+            int totalLen = ihl + 8 + respLen;
+            byte[] pkt = new byte[totalLen];
+
+            // IP header — swap src/dst
+            System.arraycopy(originalReq, 0, pkt, 0, ihl);
+            // swap src/dst IP
+            System.arraycopy(originalReq, 12, pkt, 16, 4);
+            System.arraycopy(originalReq, 16, pkt, 12, 4);
+            // total length
+            pkt[2] = (byte)((totalLen >> 8) & 0xFF);
+            pkt[3] = (byte)(totalLen & 0xFF);
+            // TTL
+            pkt[8] = 64;
+            // checksum reset
+            pkt[10] = 0; pkt[11] = 0;
+            // UDP header — swap ports
+            pkt[ihl]     = originalReq[ihl + 2];
+            pkt[ihl + 1] = originalReq[ihl + 3];
+            pkt[ihl + 2] = originalReq[ihl];
+            pkt[ihl + 3] = originalReq[ihl + 1];
+            int udpLen = 8 + respLen;
+            pkt[ihl + 4] = (byte)((udpLen >> 8) & 0xFF);
+            pkt[ihl + 5] = (byte)(udpLen & 0xFF);
+            pkt[ihl + 6] = 0; pkt[ihl + 7] = 0;  // checksum
+            // DNS data
+            System.arraycopy(dnsResp, 0, pkt, ihl + 8, respLen);
+            // IP checksum
+            int cksum = 0;
+            for (int i = 0; i < ihl; i += 2) {
+                cksum += ((pkt[i] & 0xFF) << 8) | (pkt[i+1] & 0xFF);
+            }
+            while ((cksum >> 16) != 0) cksum = (cksum & 0xFFFF) + (cksum >> 16);
+            cksum = ~cksum & 0xFFFF;
+            pkt[10] = (byte)((cksum >> 8) & 0xFF);
+            pkt[11] = (byte)(cksum & 0xFF);
+            return pkt;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private void stopVpn() {
+        running.set(false);
+        if (executor != null) executor.shutdownNow();
+        try {
+            if (vpnInterface != null) vpnInterface.close();
+        } catch (Exception ignored) {}
+        stopForeground(true);
+        stopSelf();
+        Log.i(TAG, "VPN stopped");
+    }
+
+    @Override
+    public void onDestroy() {
+        stopVpn();
+        super.onDestroy();
+    }
+
+    private void createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel ch = new NotificationChannel(
+                CHANNEL_ID, "Riot DNS VPN", NotificationManager.IMPORTANCE_LOW
+            );
+            ch.setDescription("DNS changer در حال اجرا");
+            NotificationManager nm = getSystemService(NotificationManager.class);
+            nm.createNotificationChannel(ch);
+        }
+    }
+
+    private Notification buildNotification() {
+        Intent stopIntent = new Intent(this, RiotVpnService.class);
+        stopIntent.setAction(ACTION_STOP);
+        PendingIntent stopPI = PendingIntent.getService(
+            this, 0, stopIntent, PendingIntent.FLAG_IMMUTABLE
+        );
+        return new NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("Riot DNS فعال")
+            .setContentText("DNS: " + PRIMARY_DNS + "  (" + DNS_PROTOCOL + ")")
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setOngoing(true)
+            .addAction(android.R.drawable.ic_delete, "توقف", stopPI)
+            .build();
+    }
+}
