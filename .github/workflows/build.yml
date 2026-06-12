@@ -2,6 +2,7 @@ name: Build APK
 
 on:
   push:
+    branches: [ main, master ]
 
 jobs:
   build:
@@ -20,17 +21,18 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.19.0'
+          flutter-version: '3.27.0'      # ← آپدیت شد
+          channel: 'stable'
 
       - name: Get Flutter dependencies
         run: flutter pub get
 
       - name: Build APK
-        run: flutter build apk --release
+        run: flutter build apk --release --split-per-abi
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: app-release
           path: build/app/outputs/flutter-apk/app-release.apk
-          retention-days: 30 
+          retention-days: 30
