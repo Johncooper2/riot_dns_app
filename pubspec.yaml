@@ -10,7 +10,7 @@ dependencies:
   flutter:
     sdk: flutter
   # VPN service برای DNS changer بدون root
-  flutter_vpn: ^4.0.0
+  flutter_vpn: ^0.13.0
   # شبکه و HTTP
   http: ^1.2.0
   # ذخیره تنظیمات
