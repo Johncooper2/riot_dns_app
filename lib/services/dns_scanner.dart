@@ -61,14 +61,18 @@ class DnsScanner {
     for (int i = 0; i < count; i++) {
       try {
         final socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
+        final nonBroadcast = socket.where((d) => d != null).cast<Datagram>();
         final t0 = DateTime.now();
         socket.send(payload, InternetAddress(ip), 53);
-        await socket.timeout(timeout).first;
+
+        final datagram = await nonBroadcast.timeout(timeout).first;
         final elapsed = DateTime.now().difference(t0).inMicroseconds / 1000.0;
         latencies.add(elapsed);
         socket.close();
+      } on TimeoutException {
+        // timeout
       } catch (_) {
-        // timeout یا error
+        // error
       }
     }
 
@@ -116,6 +120,8 @@ class DnsScanner {
         onBadCertificate: (_) => true,
       ).timeout(timeout);
 
+      final tlsVer = tls.selectedProtocol?.substring(4) ?? 'TLS1.3';
+
       final query = buildDnsQuery('google.com');
       final lenPrefix = Uint8List(2);
       lenPrefix[0] = (query.length >> 8) & 0xFF;
@@ -131,7 +137,7 @@ class DnsScanner {
       return ProtocolResult(
         supported: true,
         latencyMs: elapsed,
-        tlsVersion: 'TLS1.3',
+        tlsVersion: tlsVer,
       );
     } on TlsException catch (e) {
       return ProtocolResult(supported: false, error: 'cert:${e.message}');
@@ -155,7 +161,7 @@ class DnsScanner {
       return ProtocolResult(supported: false, error: 'no_hostname');
     }
     try {
-      final client = HttpClient()..badCertificateCallback = (_, __, ___) => false;
+      final client = HttpClient()..badCertificateCallback = (_, __, ___) => true;
       client.connectionTimeout = timeout;
 
       final query  = buildDnsQuery('google.com');

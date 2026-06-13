@@ -1,6 +1,7 @@
 // lib/screens/settings_screen.dart
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../services/vpn_service.dart';
 import '../theme.dart';
 
@@ -85,8 +86,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
             )),
             const SizedBox(width: 10),
             ElevatedButton(
-              onPressed: () {
-                // ذخیره در SharedPrefs برای استفاده VPN
+              onPressed: () async {
+                final ip = _ctrl.text.trim();
+                if (ip.isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                    content: Text('آدرس DNS رو وارد کن'),
+                    backgroundColor: AppTheme.red,
+                  ));
+                  return;
+                }
+                final prefs = await SharedPreferences.getInstance();
+                await prefs.setString('dns1', ip);
+                setState(() => _customDns = ip);
                 ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
                   content: Text('DNS ذخیره شد'),
                   backgroundColor: AppTheme.green,

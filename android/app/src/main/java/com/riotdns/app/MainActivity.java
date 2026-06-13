@@ -1,6 +1,8 @@
 package com.riotdns.app;
 
 import android.app.Activity;
+import android.app.ActivityManager;
+import android.content.Context;
 import android.content.Intent;
 import android.net.VpnService;
 import android.os.Bundle;
@@ -102,7 +104,13 @@ public class MainActivity extends FlutterActivity {
     }
 
     private boolean isServiceRunning() {
-        // ساده‌ترین روش — بررسی static flag
-        return RiotVpnService.PRIMARY_DNS != null;
+        ActivityManager am = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
+        if (am == null) return false;
+        for (ActivityManager.RunningServiceInfo info : am.getRunningServices(Integer.MAX_VALUE)) {
+            if (RiotVpnService.class.getName().equals(info.service.getClassName())) {
+                return true;
+            }
+        }
+        return false;
     }
 }

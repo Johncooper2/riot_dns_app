@@ -34,24 +34,17 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   }
 
   Future<void> _loadState() async {
-  try {
-    final running = await VpnDnsService.checkRunning()
-        .timeout(const Duration(seconds: 3), onTimeout: () => false);
-    final name = await VpnDnsService.getSavedDnsName();
-    final ip   = await VpnDnsService.getSavedDnsIp();
+    final running = await VpnDnsService.checkRunning();
+    final name    = await VpnDnsService.getSavedDnsName();
+    final ip      = await VpnDnsService.getSavedDnsIp();
+    final proto   = await VpnDnsService.getSavedProtocol();
     if (mounted) setState(() {
       _vpnRunning    = running;
       _activeDnsName = name ?? '—';
       _activeDnsIp   = ip   ?? '—';
-    });
-  } catch (_) {
-    if (mounted) setState(() {
-      _vpnRunning    = false;
-      _activeDnsName = '—';
-      _activeDnsIp   = '—';
+      _activeProto   = proto ?? '—';
     });
   }
-}
 
   Future<void> _toggle() async {
     if (_loading) return;

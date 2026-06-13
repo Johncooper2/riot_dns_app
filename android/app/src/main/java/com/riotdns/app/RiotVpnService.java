@@ -210,7 +210,7 @@ public class RiotVpnService extends VpnService {
             int ihl    = (data[0] & 0x0F) * 4;
             int udpLen = ((data[ihl + 4] & 0xFF) << 8) | (data[ihl + 5] & 0xFF);
             int payloadLen = udpLen - 8;
-            if (payloadLen <= 0) return null;
+            if (payloadLen <= 0 || ihl + 8 + payloadLen > len) return null;
             byte[] payload = new byte[payloadLen];
             System.arraycopy(data, ihl + 8, payload, 0, payloadLen);
             return payload;

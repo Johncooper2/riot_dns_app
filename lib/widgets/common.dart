@@ -77,6 +77,7 @@ class DnsCard extends StatelessWidget {
   final bool isSelected;
   final VoidCallback? onTap;
   final VoidCallback? onActivate;
+  final VoidCallback? onLongPress;
 
   const DnsCard({
     super.key,
@@ -85,6 +86,7 @@ class DnsCard extends StatelessWidget {
     this.isSelected = false,
     this.onTap,
     this.onActivate,
+    this.onLongPress,
   });
 
   @override
@@ -97,6 +99,7 @@ class DnsCard extends StatelessWidget {
 
     return GestureDetector(
       onTap: onTap,
+      onLongPress: onLongPress,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
         margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),

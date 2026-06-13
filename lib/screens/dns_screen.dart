@@ -81,6 +81,16 @@ class _DnsScreenState extends State<DnsScreen> {
     });
   }
 
+  void _toggleSecondary(DnsServer server) {
+    setState(() {
+      if (_selectedSecondary?.ip == server.ip) {
+        _selectedSecondary = null;
+      } else {
+        _selectedSecondary = server;
+      }
+    });
+  }
+
   Future<void> _activateDns(DnsServer primary) async {
     final ok = await VpnDnsService.start(primary, secondary: _selectedSecondary);
     if (!mounted) return;
@@ -248,11 +258,36 @@ class _DnsScreenState extends State<DnsScreen> {
                         _showAndroidConfig(s);
                         return false;
                       },
-                      child: DnsCard(
-                        server: s,
-                        isActive: isActive,
-                        onTap: () => _scanOne(s),
-                        onActivate: () => _activateDns(s),
+                      child: LongPressDraggable<DnsServer>(
+                        data: s,
+                        onDragStarted: () {
+                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                            content: Text('SECONDARY: ${s.name}'),
+                            backgroundColor: AppTheme.accent,
+                            duration: const Duration(seconds: 1),
+                          ));
+                        },
+                        feedback: Material(
+                          color: Colors.transparent,
+                          child: Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: AppTheme.card,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: AppTheme.accent),
+                            ),
+                            child: Text(s.name, style: const TextStyle(color: AppTheme.accent, fontSize: 12)),
+                          ),
+                        ),
+                        childWhenDragging: const SizedBox.shrink(),
+                        child: DnsCard(
+                          server: s,
+                          isActive: isActive,
+                          isSelected: s.ip == _selectedSecondary?.ip,
+                          onTap: () => _scanOne(s),
+                          onActivate: () => _activateDns(s),
+                          onLongPress: () => _toggleSecondary(s),
+                        ),
                       ),
                     );
                   },

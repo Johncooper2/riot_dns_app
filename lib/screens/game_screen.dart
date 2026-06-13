@@ -126,7 +126,9 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
   }
 
   Widget _buildChart(List<GameServer> servers, Color color) {
-    final top = servers.take(8).toList();
+    final top = servers.where((s) => s.latencyMs != null && s.latencyMs! > 0).take(8).toList();
+    if (top.isEmpty) return const SizedBox.shrink();
+    final maxY = top.map((s) => s.latencyMs!).reduce((a, b) => a > b ? a : b) * 1.3;
     return Container(
       height: 130,
       margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
@@ -138,7 +140,7 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
       ),
       child: BarChart(BarChartData(
         alignment: BarChartAlignment.spaceAround,
-        maxY: (top.map((s) => s.latencyMs ?? 0).reduce((a, b) => a > b ? a : b) * 1.3),
+        maxY: maxY,
         barGroups: top.asMap().entries.map((e) => BarChartGroupData(
           x: e.key,
           barRods: [BarChartRodData(

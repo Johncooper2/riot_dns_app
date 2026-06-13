@@ -46,16 +46,14 @@ class VpnDnsService {
 
   /// وضعیت VPN
   static Future<bool> checkRunning() async {
-  try {
-    final r = await _channel.invokeMethod<bool>('isVpnRunning')
-        .timeout(const Duration(seconds: 3), onTimeout: () => false);
-    _isRunning = r ?? false;
-    return _isRunning;
-  } catch (_) {
-    _isRunning = false;
-    return false;
+    try {
+      final r = await _channel.invokeMethod<bool>('isVpnRunning');
+      _isRunning = r ?? false;
+      return _isRunning;
+    } catch (_) {
+      return false;
+    }
   }
-}
 
   static Future<void> _savePrefs(DnsServer primary, DnsServer? secondary) async {
     final prefs = await SharedPreferences.getInstance();
@@ -74,6 +72,11 @@ class VpnDnsService {
   static Future<String?> getSavedDnsName() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString('dns_name');
+  }
+
+  static Future<String?> getSavedProtocol() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('protocol');
   }
 
   static Future<bool> getAutoStart() async {
