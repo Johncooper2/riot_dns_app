@@ -9,30 +9,16 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  
-  flutter_vpn: ^0.13.0
   http: ^1.2.0
   shared_preferences: ^2.2.2
-  flutter_svg: ^2.0.9
   flutter_animate: ^4.5.0
   fl_chart: ^0.67.0
   permission_handler: ^11.3.0
-  
-  
-  clipboard: ^3.0.14     
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^3.0.0
-  flutter_launcher_icons: ^0.13.1
-
-flutter_launcher_icons:
-  android: true
-  ios: false
-  image_path: "assets/icon.png"
-  min_sdk_android: 21
 
 flutter:
   uses-material-design: true
-  assets:
-    - assets/
