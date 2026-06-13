@@ -90,18 +90,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 final ip = _ctrl.text.trim();
                 if (ip.isEmpty) {
                   ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                    content: Text('آدرس DNS رو وارد کن'),
+                    content: Text('آدرس IP رو وارد کن'),
+                    backgroundColor: AppTheme.yellow,
+                  ));
+                  return;
+                }
+                final regex = RegExp(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$');
+                if (!regex.hasMatch(ip)) {
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                    content: Text('فرمت IP صحیح نیست'),
                     backgroundColor: AppTheme.red,
                   ));
                   return;
                 }
                 final prefs = await SharedPreferences.getInstance();
                 await prefs.setString('dns1', ip);
-                setState(() => _customDns = ip);
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                  content: Text('DNS ذخیره شد'),
-                  backgroundColor: AppTheme.green,
-                ));
+                await prefs.setString('dns_name', 'Custom ($ip)');
+                if (mounted) {
+                  setState(() => _customDns = ip);
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                    content: Text('DNS ذخیره شد'),
+                    backgroundColor: AppTheme.green,
+                  ));
+                }
               },
               child: const Text('ذخیره'),
             ),
@@ -116,7 +127,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
         // ── درباره ───────────────────────────────────────────
         _sectionHeader('درباره'),
-        _infoTile('نسخه', '3.0.0'),
+        _infoTile('نسخه', '3.1.0'),
         _infoTile('اندروید مینیمم', '5.0 (API 21)'),
         _infoTile('روش DNS', 'VPN-based (بدون root)'),
         const SizedBox(height: 40),

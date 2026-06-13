@@ -43,7 +43,7 @@ class DnsScanner {
     }
     buf.addByte(0x00);
     // qtype + qclass
-    buf.addByte(0x00); buf.addByte(qtype);
+    buf.addByte((qtype >> 8) & 0xFF); buf.addByte(qtype & 0xFF);
     buf.addByte(0x00); buf.addByte(0x01);
     return buf.toBytes();
   }
@@ -61,18 +61,14 @@ class DnsScanner {
     for (int i = 0; i < count; i++) {
       try {
         final socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
-        final nonBroadcast = socket.where((d) => d != null).cast<Datagram>();
         final t0 = DateTime.now();
         socket.send(payload, InternetAddress(ip), 53);
-
-        final datagram = await nonBroadcast.timeout(timeout).first;
+        await socket.timeout(timeout).first;
         final elapsed = DateTime.now().difference(t0).inMicroseconds / 1000.0;
         latencies.add(elapsed);
         socket.close();
-      } on TimeoutException {
-        // timeout
       } catch (_) {
-        // error
+        // timeout یا error
       }
     }
 
@@ -120,8 +116,6 @@ class DnsScanner {
         onBadCertificate: (_) => true,
       ).timeout(timeout);
 
-      final tlsVer = tls.selectedProtocol?.substring(4) ?? 'TLS1.3';
-
       final query = buildDnsQuery('google.com');
       final lenPrefix = Uint8List(2);
       lenPrefix[0] = (query.length >> 8) & 0xFF;
@@ -132,12 +126,13 @@ class DnsScanner {
 
       await tls.timeout(const Duration(seconds: 2)).first;
       final elapsed = DateTime.now().difference(t0).inMicroseconds / 1000.0;
+      final tlsVersion = tls.selectedProtocol ?? 'unknown';
       await tls.close();
 
       return ProtocolResult(
         supported: true,
         latencyMs: elapsed,
-        tlsVersion: tlsVer,
+        tlsVersion: tlsVersion,
       );
     } on TlsException catch (e) {
       return ProtocolResult(supported: false, error: 'cert:${e.message}');
@@ -161,19 +156,18 @@ class DnsScanner {
       return ProtocolResult(supported: false, error: 'no_hostname');
     }
     try {
-      final client = HttpClient()..badCertificateCallback = (_, __, ___) => true;
+      final client = HttpClient()..badCertificateCallback = (_, __, ___) => false;
       client.connectionTimeout = timeout;
 
       final query  = buildDnsQuery('google.com');
-      final b64    = Uri.encodeComponent(
-        _base64UrlEncode(query)
-      );
-      final uri    = Uri.parse('https://$ip$path?dns=$b64');
+      final uri    = Uri.parse('https://$hostname$path');
 
       final t0     = DateTime.now();
-      final req    = await client.getUrl(uri);
+      final req    = await client.postUrl(uri);
       req.headers.set('Host', hostname);
       req.headers.set('Accept', 'application/dns-message');
+      req.headers.set('Content-Type', 'application/dns-message');
+      req.add(query);
       final resp   = await req.close().timeout(timeout);
       final elapsed = DateTime.now().difference(t0).inMicroseconds / 1000.0;
       await resp.drain();

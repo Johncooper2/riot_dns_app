@@ -33,12 +33,16 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
 
   Future<void> _scanAll() async {
     setState(() { _scanning = true; _scanned = 0; });
-    final futures = _servers.map((s) =>
-      DnsScanner.scanGameServer(s, count: 4, onUpdate: () {
-        if (mounted) setState(() => _scanned++);
-      })
-    ).toList();
-    await Future.wait(futures);
+    const batchSize = 5;
+    for (var i = 0; i < _servers.length; i += batchSize) {
+      final batch = _servers.sublist(i, (i + batchSize).clamp(0, _servers.length));
+      final futures = batch.map((s) =>
+        DnsScanner.scanGameServer(s, count: 4, onUpdate: () {
+          if (mounted) setState(() => _scanned++);
+        })
+      ).toList();
+      await Future.wait(futures);
+    }
     if (mounted) setState(() => _scanning = false);
   }
 
@@ -126,9 +130,7 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
   }
 
   Widget _buildChart(List<GameServer> servers, Color color) {
-    final top = servers.where((s) => s.latencyMs != null && s.latencyMs! > 0).take(8).toList();
-    if (top.isEmpty) return const SizedBox.shrink();
-    final maxY = top.map((s) => s.latencyMs!).reduce((a, b) => a > b ? a : b) * 1.3;
+    final top = servers.take(8).toList();
     return Container(
       height: 130,
       margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
@@ -140,7 +142,7 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
       ),
       child: BarChart(BarChartData(
         alignment: BarChartAlignment.spaceAround,
-        maxY: maxY,
+        maxY: (top.map((s) => s.latencyMs ?? 0).reduce((a, b) => a > b ? a : b) * 1.3),
         barGroups: top.asMap().entries.map((e) => BarChartGroupData(
           x: e.key,
           barRods: [BarChartRodData(

@@ -65,29 +65,22 @@ class _DnsScreenState extends State<DnsScreen> {
 
   Future<void> _scanAll() async {
     setState(() { _scanning = true; _scanned = 0; });
-    final futures = <Future>[];
-    for (final s in _servers) {
-      futures.add(DnsScanner.scanDnsServer(s, count: 4, onUpdate: () {
-        if (mounted) setState(() => _scanned++);
-      }));
+    const batchSize = 5;
+    for (var i = 0; i < _servers.length; i += batchSize) {
+      final batch = _servers.sublist(i, (i + batchSize).clamp(0, _servers.length));
+      final futures = batch.map((s) =>
+        DnsScanner.scanDnsServer(s, count: 4, onUpdate: () {
+          if (mounted) setState(() => _scanned++);
+        })
+      ).toList();
+      await Future.wait(futures);
     }
-    await Future.wait(futures);
     if (mounted) setState(() => _scanning = false);
   }
 
   Future<void> _scanOne(DnsServer server) async {
     await DnsScanner.scanDnsServer(server, count: 5, onUpdate: () {
       if (mounted) setState(() {});
-    });
-  }
-
-  void _toggleSecondary(DnsServer server) {
-    setState(() {
-      if (_selectedSecondary?.ip == server.ip) {
-        _selectedSecondary = null;
-      } else {
-        _selectedSecondary = server;
-      }
     });
   }
 
@@ -258,35 +251,29 @@ class _DnsScreenState extends State<DnsScreen> {
                         _showAndroidConfig(s);
                         return false;
                       },
-                      child: LongPressDraggable<DnsServer>(
-                        data: s,
-                        onDragStarted: () {
+                      child: GestureDetector(
+                        onLongPress: () {
+                          setState(() {
+                            if (_selectedSecondary?.ip == s.ip) {
+                              _selectedSecondary = null;
+                            } else {
+                              _selectedSecondary = s;
+                            }
+                          });
                           ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                            content: Text('SECONDARY: ${s.name}'),
-                            backgroundColor: AppTheme.accent,
+                            content: Text(_selectedSecondary != null
+                              ? 'Secondary DNS: ${_selectedSecondary!.ip}'
+                              : 'Secondary DNS حذف شد'),
+                            backgroundColor: _selectedSecondary != null ? AppTheme.accent : AppTheme.textSec,
                             duration: const Duration(seconds: 1),
                           ));
                         },
-                        feedback: Material(
-                          color: Colors.transparent,
-                          child: Container(
-                            padding: const EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: AppTheme.card,
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: AppTheme.accent),
-                            ),
-                            child: Text(s.name, style: const TextStyle(color: AppTheme.accent, fontSize: 12)),
-                          ),
-                        ),
-                        childWhenDragging: const SizedBox.shrink(),
                         child: DnsCard(
                           server: s,
                           isActive: isActive,
-                          isSelected: s.ip == _selectedSecondary?.ip,
+                          isSelected: _selectedSecondary?.ip == s.ip,
                           onTap: () => _scanOne(s),
                           onActivate: () => _activateDns(s),
-                          onLongPress: () => _toggleSecondary(s),
                         ),
                       ),
                     );

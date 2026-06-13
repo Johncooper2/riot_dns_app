@@ -63,11 +63,28 @@ class AppTheme {
         side: const BorderSide(color: border),
       ),
     ),
+    tabBarTheme: const TabBarThemeData(
+      indicatorColor: accent,
+      labelColor: accent,
+      unselectedLabelColor: textSec,
+    ),
     dividerColor: border,
     textTheme: const TextTheme(
       bodyLarge:  TextStyle(color: textPrim),
       bodyMedium: TextStyle(color: textPrim),
       bodySmall:  TextStyle(color: textSec),
+    ),
+    inputDecorationTheme: InputDecorationTheme(
+      filled: true,
+      fillColor: card,
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: border),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: border),
+      ),
     ),
   );
 }

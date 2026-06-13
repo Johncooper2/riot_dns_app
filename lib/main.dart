@@ -1,20 +1,19 @@
-// lib/main.dart
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'theme.dart';
 import 'screens/home_screen.dart';
 import 'screens/dns_screen.dart';
 import 'screens/game_screen.dart';
 import 'screens/settings_screen.dart';
+import 'theme.dart';
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
     statusBarColor: Colors.transparent,
     statusBarIconBrightness: Brightness.light,
-    systemNavigationBarColor: AppTheme.surface,
+    systemNavigationBarColor: Color(0xFF111827),
   ));
-  SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+  await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   runApp(const RiotDnsApp());
 }
 
@@ -53,10 +52,10 @@ class _MainShellState extends State<MainShell> {
       onTap: (i) => setState(() => _idx = i),
       type: BottomNavigationBarType.fixed,
       items: const [
-        BottomNavigationBarItem(icon: Icon(Icons.shield), label: 'خانه'),
-        BottomNavigationBarItem(icon: Icon(Icons.dns),    label: 'DNS'),
-        BottomNavigationBarItem(icon: Icon(Icons.sports_esports), label: 'بازی'),
-        BottomNavigationBarItem(icon: Icon(Icons.settings), label: 'تنظیمات'),
+        BottomNavigationBarItem(icon: Icon(Icons.shield),          label: 'خانه'),
+        BottomNavigationBarItem(icon: Icon(Icons.dns),             label: 'DNS'),
+        BottomNavigationBarItem(icon: Icon(Icons.sports_esports),  label: 'بازی'),
+        BottomNavigationBarItem(icon: Icon(Icons.settings),        label: 'تنظیمات'),
       ],
     ),
   );

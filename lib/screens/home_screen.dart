@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import '../services/vpn_service.dart';
 import '../models/dns_server.dart';
+import '../models/game_server.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 
@@ -13,8 +14,8 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin {
-  bool   _vpnRunning = false;
-  bool   _loading    = false;
+  bool   _vpnRunning    = false;
+  bool   _loading       = false;
   String _activeDnsName = '—';
   String _activeDnsIp   = '—';
   String _activeProto   = '—';
@@ -23,8 +24,11 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   @override
   void initState() {
     super.initState();
-    _pulseCtrl = AnimationController(vsync: this, duration: const Duration(seconds: 2))..repeat(reverse: true);
-    _loadState();
+    _pulseCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 2),
+    )..repeat(reverse: true);
+    Future.microtask(() => _loadState());
   }
 
   @override
@@ -34,52 +38,76 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   }
 
   Future<void> _loadState() async {
-    final running = await VpnDnsService.checkRunning();
-    final name    = await VpnDnsService.getSavedDnsName();
-    final ip      = await VpnDnsService.getSavedDnsIp();
-    final proto   = await VpnDnsService.getSavedProtocol();
-    if (mounted) setState(() {
-      _vpnRunning    = running;
-      _activeDnsName = name ?? '—';
-      _activeDnsIp   = ip   ?? '—';
-      _activeProto   = proto ?? '—';
-    });
+    try {
+      final running = await VpnDnsService.checkRunning()
+          .timeout(const Duration(seconds: 3), onTimeout: () => false);
+      final name = await VpnDnsService.getSavedDnsName();
+      final ip   = await VpnDnsService.getSavedDnsIp();
+      if (mounted) setState(() {
+        _vpnRunning    = running;
+        _activeDnsName = name ?? '—';
+        _activeDnsIp   = ip   ?? '—';
+      });
+    } catch (_) {
+      if (mounted) setState(() {
+        _vpnRunning    = false;
+        _activeDnsName = '—';
+        _activeDnsIp   = '—';
+      });
+    }
   }
 
   Future<void> _toggle() async {
     if (_loading) return;
     setState(() => _loading = true);
-    if (_vpnRunning) {
-      await VpnDnsService.stop();
-      setState(() { _vpnRunning = false; _activeDnsName = '—'; _activeDnsIp = '—'; _activeProto = '—'; });
-    } else {
-      // اگه DNS انتخاب‌شده نداریم، به صفحه اسکن ببر
-      final ip = await VpnDnsService.getSavedDnsIp();
-      if (ip == null) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+    try {
+      if (_vpnRunning) {
+        await VpnDnsService.stop();
+        if (mounted) setState(() {
+          _vpnRunning    = false;
+          _activeDnsName = '—';
+          _activeDnsIp   = '—';
+          _activeProto   = '—';
+        });
+      } else {
+        final ip = await VpnDnsService.getSavedDnsIp();
+        if (ip == null) {
+          if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
             content: Text('ابتدا از تب DNS یه سرور انتخاب کن'),
             backgroundColor: AppTheme.yellow,
           ));
-        }
-      } else {
-        final server = kDnsServers.firstWhere((s) => s.ip == ip, orElse: () => DnsServer(name: 'Custom', ip: ip, category: 'custom'));
-        final ok = await VpnDnsService.start(server);
-        if (ok) {
-          setState(() {
-            _vpnRunning    = true;
-            _activeDnsName = server.name;
-            _activeDnsIp   = server.ip;
-            _activeProto   = server.bestProtocolForAndroid;
-          });
         } else {
-          if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('خطا در شروع VPN'), backgroundColor: AppTheme.red),
+          final server = kDnsServers.firstWhere(
+            (s) => s.ip == ip,
+            orElse: () => DnsServer(name: 'Custom', ip: ip, category: 'custom'),
           );
+          final ok = await VpnDnsService.start(server)
+              .timeout(const Duration(seconds: 10), onTimeout: () => false);
+          if (mounted) {
+            if (ok) {
+              setState(() {
+                _vpnRunning    = true;
+                _activeDnsName = server.name;
+                _activeDnsIp   = server.ip;
+                _activeProto   = server.bestProtocolForAndroid;
+              });
+            } else {
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                content: Text('خطا در اتصال VPN'),
+                backgroundColor: AppTheme.red,
+              ));
+            }
+          }
         }
       }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('خطا: $e'),
+        backgroundColor: AppTheme.red,
+      ));
+    } finally {
+      if (mounted) setState(() => _loading = false);
     }
-    setState(() => _loading = false);
   }
 
   @override
@@ -99,16 +127,12 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       body: SingleChildScrollView(
         child: Column(children: [
           const SizedBox(height: 32),
-          // ── VPN Power Button ──────────────────────────────────
           _buildPowerButton(),
           const SizedBox(height: 32),
-          // ── Status Card ───────────────────────────────────────
           _buildStatusCard(),
           const SizedBox(height: 24),
-          // ── Protocol Info ─────────────────────────────────────
           if (_vpnRunning) _buildProtocolCard(),
           const SizedBox(height: 24),
-          // ── Quick Stats ───────────────────────────────────────
           _buildQuickStats(),
           const SizedBox(height: 32),
         ]),
@@ -122,7 +146,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       child: GestureDetector(
         onTap: _toggle,
         child: Stack(alignment: Alignment.center, children: [
-          // حلقه pulse
           if (_vpnRunning)
             AnimatedBuilder(
               animation: _pulseCtrl,
@@ -132,13 +155,12 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   border: Border.all(
-                    color: AppTheme.green.withOpacity(0.3 - _pulseCtrl.value * 0.3),
+                    color: AppTheme.green.withOpacity(0.3 - _pulseCtrl.value * 0.28),
                     width: 2,
                   ),
                 ),
               ),
             ),
-          // دکمه اصلی
           Container(
             width: 140, height: 140,
             decoration: BoxDecoration(
@@ -173,10 +195,13 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       decoration: BoxDecoration(
         color: AppTheme.card,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _vpnRunning ? AppTheme.green.withOpacity(0.4) : AppTheme.border),
+        border: Border.all(
+          color: _vpnRunning ? AppTheme.green.withOpacity(0.4) : AppTheme.border,
+        ),
       ),
       child: Column(children: [
-        _statusRow('وضعیت', _vpnRunning ? '🟢 متصل' : '🔴 قطع', _vpnRunning ? AppTheme.green : AppTheme.red),
+        _statusRow('وضعیت', _vpnRunning ? '🟢 متصل' : '🔴 قطع',
+            _vpnRunning ? AppTheme.green : AppTheme.red),
         const Divider(color: AppTheme.border, height: 20),
         _statusRow('DNS سرور', _activeDnsName, AppTheme.textPrim),
         const SizedBox(height: 8),
@@ -193,7 +218,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     children: [
       Text(label, style: const TextStyle(color: AppTheme.textSec, fontSize: 13)),
       const Spacer(),
-      Text(value, style: TextStyle(color: valueColor, fontSize: 13, fontWeight: FontWeight.w600)),
+      Text(value, style: TextStyle(
+        color: valueColor, fontSize: 13, fontWeight: FontWeight.w600,
+      )),
     ],
   );
 
@@ -210,10 +237,11 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         const Icon(Icons.security, color: AppTheme.green, size: 20),
         const SizedBox(width: 10),
         Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text('VPN فعال است', style: TextStyle(color: AppTheme.green, fontSize: 13, fontWeight: FontWeight.w700)),
+          const Text('VPN فعال است',
+              style: TextStyle(color: AppTheme.green, fontSize: 13, fontWeight: FontWeight.w700)),
           const SizedBox(height: 2),
           Text(
-            'همه ترافیک DNS از طریق $_activeDnsIp رمزنگاری‌شده هدایت می‌شه',
+            'DNS از طریق $_activeDnsIp هدایت می‌شه',
             style: const TextStyle(color: AppTheme.textSec, fontSize: 11),
           ),
         ])),
@@ -225,11 +253,12 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20),
       child: Row(children: [
-        _statBox('🎮', 'سرورهای بازی', '17', AppTheme.gold),
+        _statBox('🎮', 'سرور بازی', '${kGameServers.length}', AppTheme.gold),
         const SizedBox(width: 12),
         _statBox('🌐', 'DNS سرور', '${kDnsServers.length}', AppTheme.accent),
         const SizedBox(width: 12),
-        _statBox('🔒', 'DoT پشتیبانی', '${kDnsServers.where((s) => s.dotHostname != null).length}', AppTheme.green),
+        _statBox('🔒', 'DoT دارن',
+            '${kDnsServers.where((s) => s.dotHostname != null).length}', AppTheme.green),
       ]),
     );
   }
@@ -245,9 +274,13 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       child: Column(children: [
         Text(icon, style: const TextStyle(fontSize: 22)),
         const SizedBox(height: 6),
-        Text(value, style: TextStyle(color: color, fontSize: 18, fontWeight: FontWeight.w800)),
+        Text(value, style: TextStyle(
+          color: color, fontSize: 18, fontWeight: FontWeight.w800,
+        )),
         const SizedBox(height: 2),
-        Text(label, style: const TextStyle(color: AppTheme.textSec, fontSize: 10), textAlign: TextAlign.center),
+        Text(label,
+            style: const TextStyle(color: AppTheme.textSec, fontSize: 10),
+            textAlign: TextAlign.center),
       ]),
     ),
   );
@@ -256,7 +289,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     context: context,
     builder: (_) => AlertDialog(
       backgroundColor: AppTheme.surface,
-      title: const Text('Riot DNS Changer v3.0', style: TextStyle(color: AppTheme.textPrim)),
+      title: const Text('Riot DNS Changer v3.1',
+          style: TextStyle(color: AppTheme.textPrim)),
       content: const Text(
         'DNS Changer بدون نیاز به root\n\n'
         '• VPN-based — اندروید ≥ 5\n'
@@ -265,7 +299,10 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         '• راهنمای Private DNS اندروید',
         style: TextStyle(color: AppTheme.textSec, height: 1.6),
       ),
-      actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('بستن'))],
+      actions: [TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('بستن'),
+      )],
     ),
   );
 }

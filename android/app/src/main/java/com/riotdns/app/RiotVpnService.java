@@ -17,48 +17,35 @@ import java.io.FileOutputStream;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
-import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
-import java.nio.channels.DatagramChannel;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * RiotVpnService
- * ─────────────────────────────────────────────────────────────
- * VPN-based DNS changer بدون نیاز به root.
- * روش کار:
- *   1. یه VPN interface مجازی (tun0) می‌سازه
- *   2. فقط ترافیک DNS (پورت 53 UDP) رو intercept می‌کنه
- *   3. query‌ها رو به DNS انتخاب‌شده توسط کاربر forward می‌کنه
- *   4. جواب‌ها رو برمی‌گردونه به app
- *
- * نتیجه: همه اپ‌های گوشی از DNS دلخواه استفاده می‌کنن.
+ * VPN-based DNS changer.
+ * Routes all traffic through VPN, intercepts DNS (UDP port 53),
+ * forwards DNS to configured server, relays other UDP via protected socket.
  */
 public class RiotVpnService extends VpnService {
 
-    private static final String TAG         = "RiotVpnService";
-    private static final String CHANNEL_ID  = "riot_dns_vpn";
-    private static final int    NOTIF_ID    = 1001;
-    private static final int    VPN_MTU     = 1500;
+    private static final String TAG        = "RiotVpnService";
+    private static final String CHANNEL_ID = "riot_dns_vpn";
+    private static final int    NOTIF_ID   = 1001;
+    private static final int    VPN_MTU    = 1500;
 
-    // آدرس مجازی VPN interface
     private static final String VPN_ADDRESS = "10.0.0.2";
-    private static final String VPN_ROUTE   = "0.0.0.0";
-    private static final int    VPN_PREFIX  = 0;  // default route
 
-    // DNS پیش‌فرض (از Flutter ست می‌شه)
     public static String PRIMARY_DNS   = "1.1.1.1";
     public static String SECONDARY_DNS = "8.8.8.8";
-    public static String DNS_PROTOCOL  = "DoU";  // DoU | DoT | DoH
+    public static String DNS_PROTOCOL  = "DoU";
     public static String DOT_HOSTNAME  = "";
 
     private ParcelFileDescriptor vpnInterface;
     private ExecutorService      executor;
     private AtomicBoolean        running = new AtomicBoolean(false);
 
-    // ─── Flutter ↔ Java Channel ────────────────────────────────
     public static final String ACTION_START  = "com.riotdns.START";
     public static final String ACTION_STOP   = "com.riotdns.STOP";
     public static final String EXTRA_DNS1    = "dns1";
@@ -76,7 +63,6 @@ public class RiotVpnService extends VpnService {
             return START_NOT_STICKY;
         }
 
-        // پارامترهای DNS از Flutter
         PRIMARY_DNS   = intent.getStringExtra(EXTRA_DNS1);
         SECONDARY_DNS = intent.getStringExtra(EXTRA_DNS2);
         DNS_PROTOCOL  = intent.getStringExtra(EXTRA_PROTO);
@@ -93,7 +79,6 @@ public class RiotVpnService extends VpnService {
             createNotificationChannel();
             startForeground(NOTIF_ID, buildNotification());
 
-            // ساخت VPN interface
             Builder builder = new Builder();
             builder.setMtu(VPN_MTU);
             builder.addAddress(VPN_ADDRESS, 32);
@@ -101,9 +86,7 @@ public class RiotVpnService extends VpnService {
             if (SECONDARY_DNS != null && !SECONDARY_DNS.isEmpty()) {
                 builder.addDnsServer(SECONDARY_DNS);
             }
-            // فقط DNS traffic رو route کن (پورت 53)
-            // با addRoute کل traffic رو route می‌کنیم ولی فقط DNS forward می‌کنیم
-            builder.addRoute(VPN_ROUTE, VPN_PREFIX);
+            builder.addRoute("0.0.0.0", 0);
             builder.setSession("Riot DNS");
             builder.setBlocking(true);
 
@@ -125,18 +108,20 @@ public class RiotVpnService extends VpnService {
     }
 
     /**
-     * DNS Proxy loop:
-     * packet از tun interface می‌خونه ←
-     * اگه DNS (UDP port 53) بود، به PRIMARY_DNS forward می‌کنه ←
-     * جواب رو برمی‌گردونه به tun ←
+     * Packet loop: read from tun, if DNS forward to configured server,
+     * otherwise relay non-DNS UDP through a protected socket to prevent loop.
      */
     private void runDnsProxy() {
         FileInputStream  in  = new FileInputStream(vpnInterface.getFileDescriptor());
         FileOutputStream out = new FileOutputStream(vpnInterface.getFileDescriptor());
         ByteBuffer packet = ByteBuffer.allocate(VPN_MTU);
 
-        try (DatagramSocket dnsSocket = new DatagramSocket()) {
-            protect(dnsSocket);  // از VPN loop جلوگیری می‌کنه
+        try {
+            DatagramSocket dnsSocket = new DatagramSocket();
+            protect(dnsSocket);
+
+            DatagramSocket relaySocket = new DatagramSocket();
+            protect(relaySocket);
 
             while (running.get()) {
                 packet.clear();
@@ -144,29 +129,23 @@ public class RiotVpnService extends VpnService {
                 if (length <= 0) continue;
                 packet.limit(length);
 
-                // parse IP header — بررسی DNS
                 if (!isDnsPacket(packet.array(), length)) {
-                    // برای بسته‌های غیر DNS، مستقیم forward کن
-                    out.write(packet.array(), 0, length);
+                    forwardNonDnsPacket(packet.array(), length, relaySocket, out);
                     continue;
                 }
 
-                // استخراج DNS payload از UDP/IP packet
                 byte[] dnsPayload = extractDnsPayload(packet.array(), length);
                 if (dnsPayload == null) continue;
 
-                // forward به DNS سرور
                 InetAddress dnsAddr = InetAddress.getByName(PRIMARY_DNS);
-                DatagramPacket req  = new DatagramPacket(dnsPayload, dnsPayload.length, dnsAddr, 53);
+                DatagramPacket req = new DatagramPacket(dnsPayload, dnsPayload.length, dnsAddr, 53);
                 dnsSocket.send(req);
 
-                // دریافت جواب
                 byte[] respBuf = new byte[VPN_MTU];
                 DatagramPacket resp = new DatagramPacket(respBuf, respBuf.length);
                 dnsSocket.setSoTimeout(3000);
                 try {
                     dnsSocket.receive(resp);
-                    // بسته جواب رو rebuild کن و به tun بنویس
                     byte[] replyPacket = buildReplyPacket(
                         packet.array(), resp.getData(), resp.getLength()
                     );
@@ -174,7 +153,6 @@ public class RiotVpnService extends VpnService {
                         out.write(replyPacket);
                     }
                 } catch (Exception e) {
-                    // timeout — با secondary DNS امتحان کن
                     if (SECONDARY_DNS != null && !SECONDARY_DNS.isEmpty()) {
                         try {
                             InetAddress dns2 = InetAddress.getByName(SECONDARY_DNS);
@@ -187,30 +165,68 @@ public class RiotVpnService extends VpnService {
                     }
                 }
             }
+            dnsSocket.close();
+            relaySocket.close();
         } catch (Exception e) {
             Log.e(TAG, "DNS proxy error: " + e.getMessage());
         }
     }
 
-    /** بررسی اینکه بسته IP یه DNS query هست (UDP، destination port 53) */
+    /**
+     * Forward non-DNS UDP packets through a protected socket to prevent loop.
+     * Extracts destination from IP+UDP headers, sends via relay, builds reply.
+     */
+    private void forwardNonDnsPacket(byte[] data, int len, DatagramSocket relay, FileOutputStream out) {
+        try {
+            int ihl = (data[0] & 0x0F) * 4;
+            int protocol = data[9] & 0xFF;
+            if (protocol != 17) return;
+
+            if (len < ihl + 8) return;
+
+            byte[] dstIp = new byte[4];
+            System.arraycopy(data, 16, dstIp, 0, 4);
+            InetAddress dstAddr = InetAddress.getByAddress(dstIp);
+
+            int srcPort = ((data[ihl] & 0xFF) << 8) | (data[ihl + 1] & 0xFF);
+            int dstPort = ((data[ihl + 2] & 0xFF) << 8) | (data[ihl + 3] & 0xFF);
+            int udpLen = ((data[ihl + 4] & 0xFF) << 8) | (data[ihl + 5] & 0xFF);
+            int payloadLen = udpLen - 8;
+            if (payloadLen <= 0 || ihl + 8 + payloadLen > len) return;
+
+            byte[] payload = new byte[payloadLen];
+            System.arraycopy(data, ihl + 8, payload, 0, payloadLen);
+
+            relay.setSoTimeout(3000);
+            relay.send(new DatagramPacket(payload, payload.length, dstAddr, dstPort));
+
+            byte[] respBuf = new byte[VPN_MTU];
+            DatagramPacket resp = new DatagramPacket(respBuf, respBuf.length);
+            relay.receive(resp);
+
+            byte[] replyPacket = buildUdpReplyPacket(data, ihl, resp.getData(), resp.getLength(), srcPort, dstPort);
+            if (replyPacket != null) out.write(replyPacket);
+        } catch (Exception e) {
+            // silently drop unforwardable packets
+        }
+    }
+
     private boolean isDnsPacket(byte[] data, int len) {
         if (len < 28) return false;
-        int protocol = data[9] & 0xFF;  // IP protocol field
-        if (protocol != 17) return false;  // 17 = UDP
-        // IP header length
+        int protocol = data[9] & 0xFF;
+        if (protocol != 17) return false;
         int ihl = (data[0] & 0x0F) * 4;
         if (len < ihl + 8) return false;
         int dstPort = ((data[ihl + 2] & 0xFF) << 8) | (data[ihl + 3] & 0xFF);
         return dstPort == 53;
     }
 
-    /** استخراج DNS payload از بسته UDP/IP */
     private byte[] extractDnsPayload(byte[] data, int len) {
         try {
             int ihl    = (data[0] & 0x0F) * 4;
             int udpLen = ((data[ihl + 4] & 0xFF) << 8) | (data[ihl + 5] & 0xFF);
             int payloadLen = udpLen - 8;
-            if (payloadLen <= 0 || ihl + 8 + payloadLen > len) return null;
+            if (payloadLen <= 0) return null;
             byte[] payload = new byte[payloadLen];
             System.arraycopy(data, ihl + 8, payload, 0, payloadLen);
             return payload;
@@ -219,26 +235,20 @@ public class RiotVpnService extends VpnService {
         }
     }
 
-    /** ساخت بسته IP/UDP جواب برای برگشت به tun */
     private byte[] buildReplyPacket(byte[] originalReq, byte[] dnsResp, int respLen) {
         try {
             int ihl = (originalReq[0] & 0x0F) * 4;
             int totalLen = ihl + 8 + respLen;
             byte[] pkt = new byte[totalLen];
 
-            // IP header — swap src/dst
             System.arraycopy(originalReq, 0, pkt, 0, ihl);
-            // swap src/dst IP
             System.arraycopy(originalReq, 12, pkt, 16, 4);
             System.arraycopy(originalReq, 16, pkt, 12, 4);
-            // total length
             pkt[2] = (byte)((totalLen >> 8) & 0xFF);
             pkt[3] = (byte)(totalLen & 0xFF);
-            // TTL
             pkt[8] = 64;
-            // checksum reset
             pkt[10] = 0; pkt[11] = 0;
-            // UDP header — swap ports
+
             pkt[ihl]     = originalReq[ihl + 2];
             pkt[ihl + 1] = originalReq[ihl + 3];
             pkt[ihl + 2] = originalReq[ihl];
@@ -246,10 +256,52 @@ public class RiotVpnService extends VpnService {
             int udpLen = 8 + respLen;
             pkt[ihl + 4] = (byte)((udpLen >> 8) & 0xFF);
             pkt[ihl + 5] = (byte)(udpLen & 0xFF);
-            pkt[ihl + 6] = 0; pkt[ihl + 7] = 0;  // checksum
-            // DNS data
+            pkt[ihl + 6] = 0; pkt[ihl + 7] = 0;
+
             System.arraycopy(dnsResp, 0, pkt, ihl + 8, respLen);
-            // IP checksum
+
+            int cksum = 0;
+            for (int i = 0; i < ihl; i += 2) {
+                cksum += ((pkt[i] & 0xFF) << 8) | (pkt[i+1] & 0xFF);
+            }
+            while ((cksum >> 16) != 0) cksum = (cksum & 0xFFFF) + (cksum >> 16);
+            cksum = ~cksum & 0xFFFF;
+            pkt[10] = (byte)((cksum >> 8) & 0xFF);
+            pkt[11] = (byte)(cksum & 0xFF);
+            return pkt;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * Build reply packet for relayed non-DNS UDP traffic.
+     * Swaps src/dst IP and ports from the original request.
+     */
+    private byte[] buildUdpReplyPacket(byte[] originalReq, int ihl, byte[] respData, int respLen, int origSrcPort, int origDstPort) {
+        try {
+            int totalLen = ihl + 8 + respLen;
+            byte[] pkt = new byte[totalLen];
+
+            System.arraycopy(originalReq, 0, pkt, 0, ihl);
+            System.arraycopy(originalReq, 12, pkt, 16, 4);
+            System.arraycopy(originalReq, 16, pkt, 12, 4);
+            pkt[2] = (byte)((totalLen >> 8) & 0xFF);
+            pkt[3] = (byte)(totalLen & 0xFF);
+            pkt[8] = 64;
+            pkt[10] = 0; pkt[11] = 0;
+
+            pkt[ihl]     = (byte)((origDstPort >> 8) & 0xFF);
+            pkt[ihl + 1] = (byte)(origDstPort & 0xFF);
+            pkt[ihl + 2] = (byte)((origSrcPort >> 8) & 0xFF);
+            pkt[ihl + 3] = (byte)(origSrcPort & 0xFF);
+            int udpLen = 8 + respLen;
+            pkt[ihl + 4] = (byte)((udpLen >> 8) & 0xFF);
+            pkt[ihl + 5] = (byte)(udpLen & 0xFF);
+            pkt[ihl + 6] = 0; pkt[ihl + 7] = 0;
+
+            System.arraycopy(respData, 0, pkt, ihl + 8, respLen);
+
             int cksum = 0;
             for (int i = 0; i < ihl; i += 2) {
                 cksum += ((pkt[i] & 0xFF) << 8) | (pkt[i+1] & 0xFF);

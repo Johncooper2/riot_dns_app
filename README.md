@@ -1,4 +1,4 @@
-# Riot DNS Changer v3.0
+# Riot DNS Changer v3.1.0
 ## اپ موبایل Flutter — DNS Scanner + VPN Changer
 
 ---
@@ -138,3 +138,19 @@ flutter install
 | DoU    | 53   | ❌        | IP استاتیک Wi-Fi |
 | DoT    | 853  | ✅ TLS    | Private DNS (اندروید ≥ 9) |
 | DoH    | 443  | ✅ HTTPS  | اپ AdGuard / Intra |
+
+---
+
+## تغییرات v3.1.0
+- **fix**: VPN loop bug — بسته‌های غیر-DNS الان از طریق protected socket فوروارد می‌شن
+- **fix**: SharedPreferences name mismatch — auto-start الان DNS ذخیره‌شده رو استفاده می‌کنه
+- **fix**: DoH URL از hostname استفاده می‌کنه بجای IP (رفع خطای TLS)
+- **fix**: DNS query qtype encoding برای رکوردهای غیر-A
+- **fix**: DoT test نسخه واقعی TLS رو برمی‌گردونه بجای hardcoded
+- **feature**: Secondary DNS — با long-press انتخاب کنید
+- **feature**: DNS دستی در settings واقعاً ذخیره می‌شه
+- **feature**: Batch scanning (5 تا یکبار) بجای اسکن همزمان
+- **feature**: POST_NOTIFICATIONS permission برای Android 13+
+- **feature**: FOREGROUND_SERVICE_SPECIAL_USE برای Android 14+
+- **improve**: حذف Kotlin plugin اضافی
+- **improve**: استفاده از AppTheme.dark بجای تعریف تکراری theme
