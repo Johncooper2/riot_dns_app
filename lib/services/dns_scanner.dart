@@ -107,24 +107,15 @@ class DnsScanner {
     Duration timeout = const Duration(seconds: 4),
   }) async {
     try {
-      final t0 = DateTime.now();
-      final SecureSocket tls;
-      if (hostname != null) {
-        tls = await SecureSocket.connect(
-          ip, 853,
-          serverName: hostname,
-          timeout: timeout,
-          onBadCertificate: (_) => false,
-        );
-      } else {
-        tls = await SecureSocket.connect(
-          ip, 853,
-          timeout: timeout,
-          onBadCertificate: (_) => true, // بدون certificate check
-        );
-      }
+      final t0  = DateTime.now();
+      final raw = await Socket.connect(ip, 853)
+          .timeout(timeout);
+      final tls = await SecureSocket.secure(
+        raw,
+        host: hostname,
+        onBadCertificate: (_) => true,
+      ).timeout(timeout);
 
-      // DNS query over TCP (2 bytes length prefix)
       final query = buildDnsQuery('google.com');
       final lenPrefix = Uint8List(2);
       lenPrefix[0] = (query.length >> 8) & 0xFF;
@@ -133,7 +124,6 @@ class DnsScanner {
       tls.add(query);
       await tls.flush();
 
-      // انتظار جواب
       await tls.timeout(const Duration(seconds: 2)).first;
       final elapsed = DateTime.now().difference(t0).inMicroseconds / 1000.0;
       await tls.close();
