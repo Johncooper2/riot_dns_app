@@ -63,7 +63,7 @@ class AppTheme {
         side: const BorderSide(color: border),
       ),
     ),
-    tabBarTheme: const TabBarThemeData(
+    tabBarTheme: const TabBarTheme(
       indicatorColor: accent,
       labelColor: accent,
       unselectedLabelColor: textSec,
